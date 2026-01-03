@@ -1,160 +1,117 @@
 import os
 import asyncio
 import requests
-import google.generativeai as genai
-from aiogram import Bot, Dispatcher, types, F
+from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
-from aiogram.types import FSInputFile, InlineKeyboardMarkup, InlineKeyboardButton
+import google.generativeai as genai
 from pptx import Presentation
 from pptx.util import Inches, Pt
-from pptx.dml.color import RGBColor
 from pptx.enum.text import PP_ALIGN
+from io import BytesIO
 
-# --- KONFIGURATSIYA (Kalitlaringiz joylashtirildi) ---
-TOKEN = "8461901986:AAHIQLMa1RckCqGCU71PJuJZCCnfKdWjYXk"
-GEMINI_KEY = "AIzaSyBtUB1yq7lZqF29RPozUiIpj0DT9Rh5eU8"
-PEXELS_KEY = "RCX0q9HsWJG4wb1HEvn7XjHUWteszFXWcjvwHipW69I9UZ5cGpzGLcSu"
+# API KALITLAR
+TOKEN = os.getenv("BOT_TOKEN")
+GEMINI_KEY = os.getenv("GEMINI_KEY")
+PEXELS_KEY = os.getenv("PEXELS_KEY")
 
+# AI sozlamalari - YANGI MODEL
 genai.configure(api_key=GEMINI_KEY)
-ai_model = genai.GenerativeModel('gemini-pro')
+ai_model = genai.GenerativeModel('gemini-1.5-flash')
+
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-# --- DIZAYN VA SHRIFTLAR FUNKSIYASI ---
-def apply_advanced_style(slide, style):
-    background = slide.background
-    fill = background.fill
-    fill.solid()
-    
-    # Standart sozlamalar
-    font_name = 'Arial'
-    
-    if style == "dark":
-        fill.foreground_color.rgb = RGBColor(20, 24, 35) # To'q kulrang/qora
-        text_color = RGBColor(255, 255, 255) # Oq matn
-        font_name = 'Verdana'
-    elif style == "business":
-        fill.foreground_color.rgb = RGBColor(7, 42, 108) # Professional ko'k
-        text_color = RGBColor(255, 255, 255) # Oq matn
-        font_name = 'Calibri'
-    else: # Classic/White
-        fill.foreground_color.rgb = RGBColor(255, 255, 255) # Sof oq
-        text_color = RGBColor(30, 30, 30) # To'q kulrang matn
-        font_name = 'Georgia'
-        
-    return text_color, font_name
-
-# --- PEXELS'DAN RASM OLISH ---
-def fetch_pexels_image(query):
-    headers = {"Authorization": PEXELS_KEY}
+# Rasm qidirish funksiyasi
+def get_pexels_image(query):
     url = f"https://api.pexels.com/v1/search?query={query}&per_page=1"
+    headers = {"Authorization": PEXELS_KEY}
     try:
-        r = requests.get(url, headers=headers).json()
-        if r.get('photos'):
-            img_url = r['photos'][0]['src']['large']
-            img_content = requests.get(img_url).content
-            with open("temp_slide_img.jpg", "wb") as f:
-                f.write(img_content)
-            return "temp_slide_img.jpg"
+        r = requests.get(url, headers=headers)
+        if r.status_code == 200:
+            data = r.json()
+            if data['photos']:
+                return data['photos'][0]['src']['large']
     except:
         return None
+    return None
 
-# --- BOT INTERFEYSI ---
+# Slaydni yaratish funksiyasi
+async def create_pptx(topic, slides_data, user_full_name):
+    prs = Presentation()
+    
+    # 1-SLAYD: TITUL (Mavzu va Ism-Familiya)
+    slide_layout = prs.slide_layouts[0]
+    slide = prs.slides.add_slide(slide_layout)
+    title = slide.shapes.title
+    subtitle = slide.placeholders[1]
+    
+    title.text = topic.upper()
+    subtitle.text = f"Tayyorladi: {user_full_name}\nSlayd AI Bot orqali yaratildi"
+    
+    # ASOSIY SLAYDLAR
+    for slide_info in slides_data:
+        slide = prs.slides.add_slide(prs.slide_layouts[1])
+        
+        # Sarlavha dizayni
+        title_shape = slide.shapes.title
+        title_shape.text = slide_info['title']
+        
+        # Matn dizayni
+        body_shape = slide.placeholders[1]
+        body_shape.text = slide_info['content']
+        
+        # Rasm qo'shish
+        img_url = get_pexels_image(slide_info['title'])
+        if img_url:
+            try:
+                img_data = BytesIO(requests.get(img_url).content)
+                slide.shapes.add_picture(img_data, Inches(5.5), Inches(1.5), Inches(4), Inches(3.5))
+            except:
+                pass
+            
+    file_stream = BytesIO()
+    prs.save(file_stream)
+    file_stream.seek(0)
+    return file_stream
+
 @dp.message(Command("start"))
-async def welcome(message: types.Message):
-    await message.answer("🌟 **Professional Slayd Botga xush kelibsiz!**\n\n"
-                         "Men sizga AI yordamida matn yozib, rasmlar bilan bezatilgan "
-                         "PowerPoint slaydlarini tayyorlab beraman.\n\n"
-                         "📝 **Mavzu yuboring:** (Masalan: O'zbekiston turizmi)")
+async def start_command(message: types.Message):
+    await message.answer(f"Assalomu alaykum, {message.from_user.full_name}!\n\nMavzu yuboring, men sizga ism-familiyangiz tushirilgan chiroyli slayd yasab beraman.")
 
-@dp.message(F.text)
-async def ask_design(message: types.Message):
-    topic = message.text
-    buttons = [
-        [InlineKeyboardButton(text="🌑 Dark Style (Zamonaviy)", callback_data=f"set_dark_{topic}")],
-        [InlineKeyboardButton(text="🔵 Business Blue (Rasmiy)", callback_data=f"set_business_{topic}")],
-        [InlineKeyboardButton(text="⚪ Classic White (Oddiy)", callback_data=f"set_classic_{topic}")]
-    ]
-    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
-    await message.answer(f"🎨 **'{topic}'** mavzusi uchun dizayn uslubini tanlang:", reply_markup=keyboard)
-
-@dp.callback_query(F.data.startswith("set_"))
-async def generate_presentation(call: types.CallbackQuery):
-    _, style, topic = call.data.split("_")
-    await call.message.edit_text("🔄 **AI ishlamoqda...**\nMatn tayyorlanmoqda va rasmlar yig'ilmoqda. Iltimos, kuting.")
+@dp.message()
+async def handle_message(message: types.Message):
+    user_name = message.from_user.full_name # Telegramdagi ism-familiyasini oladi
+    status = await message.answer("🎨 Slayd dizayni tayyorlanmoqda. AI matn yozmoqda...")
     
     try:
-        # Gemini AI dan o'zbekcha kontent so'rash
-        prompt = (f"Write 5 educational slides about '{topic}' in Uzbek language. "
-                  "Structure: Start each slide with 'S:', then title. Then body text. "
-                  "At the end of each slide, write 'R:' followed by one specific English keyword for a photo.")
-        
+        prompt = f"Mavzu: {message.text}. Ushbu mavzuda 5 ta slayddan iborat prezentatsiya uchun sarlavha va matn tayyorlab ber. Javob formati: Sarlavha | Matn shaklida bo'lsin."
         response = ai_model.generate_content(prompt)
-        prs = Presentation()
         
-        slides_content = response.text.split("S:")[1:]
-        for content in slides_content:
-            lines = content.strip().split('\n')
-            title_text = lines[0]
-            
-            # Kalit so'zni va matnni ajratish
-            img_keyword = "presentation"
-            clean_body = []
-            for line in lines[1:]:
-                if "R:" in line:
-                    img_keyword = line.replace("R:", "").strip()
-                else:
-                    clean_body.append(line)
-            
-            # Slayd qo'shish
-            slide_layout = prs.slide_layouts[1] # Title and Content layout
-            slide = prs.slides.add_slide(slide_layout)
-            
-            # Dizayn va Shriftlarni qo'llash
-            t_color, f_name = apply_advanced_style(slide, style)
-            
-            # 1. Sarlavha dizayni
-            title_shape = slide.shapes.title
-            title_shape.text = title_text
-            title_frame = title_shape.text_frame.paragraphs[0]
-            title_frame.font.bold = True
-            title_frame.font.size = Pt(32)
-            title_frame.font.name = f_name
-            title_frame.font.color.rgb = t_color
-            
-            # 2. Asosiy matn dizayni
-            body_shape = slide.placeholders[1]
-            body_shape.text = "\n".join(clean_body)
-            for para in body_shape.text_frame.paragraphs:
-                para.font.size = Pt(18)
-                para.font.name = f_name
-                para.font.color.rgb = t_color
-                para.alignment = PP_ALIGN.LEFT
-            
-            # 3. Pexels rasm dizayni
-            image_path = fetch_pexels_image(img_keyword)
-            if image_path:
-                # Rasmni o'ng tomonga chiroyli joylashtirish
-                slide.shapes.add_picture(image_path, Inches(6.5), Inches(1.5), Inches(3), Inches(3.5))
+        raw_text = response.text.split("\n")
+        slides_data = []
+        for line in raw_text:
+            if "|" in line:
+                parts = line.split("|", 1)
+                slides_data.append({"title": parts[0].strip(), "content": parts[1].strip()})
+        
+        if not slides_data:
+             slides_data = [{"title": message.text, "content": response.text[:500]}]
 
-        # Saqlash va yuborish
-        file_name = f"{topic.replace(' ', '_')}.pptx"
-        prs.save(file_name)
+        pptx_file = await create_pptx(message.text, slides_data, user_name)
         
-        doc = FSInputFile(file_name)
-        await bot.send_document(call.message.chat.id, doc, caption=f"✅ Slayd tayyor!\n📌 Mavzu: {topic}\n🎨 Uslub: {style}")
-        
-        # Tozalash
-        os.remove(file_name)
-        if os.path.exists("temp_slide_img.jpg"): os.remove("temp_slide_img.jpg")
+        await bot.send_document(
+            message.chat.id, 
+            types.BufferedInputFile(pptx_file.read(), filename=f"{message.text}.pptx"),
+            caption=f"✅ Slayd tayyor!\n👤 Muallif: {user_name}"
+        )
+        await status.delete()
         
     except Exception as e:
-        await call.message.answer(f"❌ Xatolik yuz berdi: {str(e)}")
-    finally:
-        await call.message.delete()
+        await message.answer(f"❌ Xatolik: {str(e)}")
 
 async def main():
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
     asyncio.run(main())
+    
