@@ -8,8 +8,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 import google.generativeai as genai
 from pptx import Presentation
-from pptx.util import Inches, Pt
-from pptx.dml.color import RGBColor
+from pptx.util import Inches
 from io import BytesIO
 
 # API KALITLAR
@@ -17,8 +16,9 @@ TOKEN = os.getenv("BOT_TOKEN")
 GEMINI_KEY = os.getenv("GEMINI_KEY")
 PEXELS_KEY = os.getenv("PEXELS_KEY")
 
-# AI ni eng xatosiz usulda sozlash
+# Modelni sozlash - XATOSIZ VARIANT
 genai.configure(api_key=GEMINI_KEY)
+ai_model = genai.GenerativeModel('gemini-1.5-flash')
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
@@ -45,22 +45,18 @@ def get_pexels_image(query):
 async def create_pptx(topic, slides_data, full_name):
     prs = Presentation()
     slide = prs.slides.add_slide(prs.slide_layouts[0])
-    title = slide.shapes.title
-    subtitle = slide.placeholders[1]
-    title.text = topic.upper()
-    title.text_frame.paragraphs[0].font.color.rgb = RGBColor(0, 51, 102)
-    subtitle.text = f"Tayyorladi: {full_name}\nSlayd Master AI orqali yaratildi"
+    slide.shapes.title.text = topic.upper()
+    slide.placeholders[1].text = f"Tayyorladi: {full_name}\nSlayd AI Bot orqali yaratildi"
     
     for slide_info in slides_data:
         slide = prs.slides.add_slide(prs.slide_layouts[1])
         slide.shapes.title.text = slide_info['title']
-        body_shape = slide.placeholders[1]
-        body_shape.text = slide_info['content']
+        slide.placeholders[1].text = slide_info['content']
         img_url = get_pexels_image(slide_info['title'])
         if img_url:
             try:
                 img_data = BytesIO(requests.get(img_url).content)
-                slide.shapes.add_picture(img_data, Inches(5.8), Inches(1.5), Inches(4), Inches(3.5))
+                slide.shapes.add_picture(img_data, Inches(6), Inches(2), Inches(3.5))
             except: pass
     file_stream = BytesIO()
     prs.save(file_stream)
@@ -69,11 +65,11 @@ async def create_pptx(topic, slides_data, full_name):
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
-    await message.answer(f"Salom! Slayd yasashni boshlash uchun tugmani bosing.", reply_markup=main_menu())
+    await message.answer(f"Assalomu alaykum! Slayd yasashni boshlash uchun tugmani bosing.", reply_markup=main_menu())
 
 @dp.message(F.text == "🚀 Slayd yaratish")
 async def start_slayd(message: types.Message, state: FSMContext):
-    await message.answer("Slayd muallifi (ism-familiya)ni kiriting:")
+    await message.answer("Slayd muallifining ism-familiyasini kiriting:")
     await state.set_state(SlaydStates.ism_familiya)
 
 @dp.message(SlaydStates.ism_familiya)
@@ -87,13 +83,11 @@ async def get_topic(message: types.Message, state: FSMContext):
     data = await state.get_data()
     user_name = data['ism']
     topic = message.text
-    status = await message.answer("⌛ AI ishlamoqda...")
+    status = await message.answer("⌛ AI ishlamoqda... Matn tayyorlanmoqda.")
     
     try:
-        # Xatolikni oldini olish uchun 'gemini-1.5-flash' modelidan foydalanamiz
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        prompt = f"Mavzu: {topic}. 5 ta slayd uchun sarlavha va matn. Format: Sarlavha | Matn"
-        response = model.generate_content(prompt)
+        prompt = f"Mavzu: {topic}. 5 ta slayd uchun: Sarlavha | Matn shaklida javob ber."
+        response = ai_model.generate_content(prompt)
         
         raw_text = response.text.split("\n")
         slides_data = []
